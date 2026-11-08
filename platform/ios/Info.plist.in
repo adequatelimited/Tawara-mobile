@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tawara for iOS. The executable is crates/mobile's `tawara` binary;
+     winit calls UIApplicationMain from it, so there is no storyboard and no
+     Swift or Objective-C source. @PLATFORM@, @MINOS@, @VERSION@ and @BUILD@
+     are filled in by platform/ios/tawara.sh; the build number comes from
+     platform/build-number.sh. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Tawara</string>
+	<key>CFBundleExecutable</key>
+	<string>tawara</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.adequatelimited.tawara</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Tawara</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>@PLATFORM@</string>
+	</array>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>MinimumOSVersion</key>
+	<string>@MINOS@</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<!-- Light status-bar content on Tawara's dark screens. winit's view
+	     controller answers preferredStatusBarStyle with
+	     UIStatusBarStyleDefault, which can render dark on dark. With
+	     UIViewControllerBasedStatusBarAppearance set to NO, UIKit uses
+	     UIStatusBarStyle below instead. -->
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleLightContent</string>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<!-- The reason the system shows when the unlock asks for Face ID. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Tawara uses Face ID to unlock the wallet on this phone, when you have turned that on.</string>
+	<!-- The reason the system shows when the scanner asks for the camera.
+	     Without this key the system terminates the application at the
+	     request. The camera is optional, so UIRequiredDeviceCapabilities
+	     does not name it. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Tawara uses the camera to read a QR code with a destination address, when you choose to scan one.</string>
+	<!-- ITSAppUsesNonExemptEncryption is not in this file: release.sh writes
+	     it from the required TAWARA_EXPORT_COMPLIANCE variable, so every
+	     upload carries an explicit export-compliance answer. -->
+</dict>
+</plist>

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tawara for Android. NativeActivity: no classes.dex, so hasCode is
+     false. The native libraries are stored uncompressed and 16 KB-aligned,
+     so the system maps them from the APK (extractNativeLibs false).
+
+     Backups: allowBackup is false, and the data-extraction rules exclude
+     every domain from cloud backup and from device transfer, which Android
+     12 and later perform regardless of allowBackup. The store also lives in
+     no_backup/, so no single guard is relied on.
+
+     Back arrives as a key event (enableOnBackInvokedCallback false) and
+     takes the task to the background; the activity is never finished. The
+     activity handles each configuration change that configChanges names, so
+     Android does not recreate it. Any other change destroys the activity,
+     which ends the process, and the next launch starts cold. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.adequatelimited.tawara">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The camera is for the QR scanner and is requested at run time, when
+         the user chooses to scan. The camera features are not required, so a
+         device without a camera can still install the application.
+         android.hardware.camera is declared explicitly, because the CAMERA
+         permission would otherwise imply it as required. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <application
+        android:label="Tawara"
+        android:hasCode="false"
+        android:extractNativeLibs="false"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="false"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <!-- configChanges names the twenty configuration changes this
+             activity handles itself: the eighteen that API 35 defines, plus
+             assetsPaths and resourcesUnused from API 36. Any change left out
+             makes Android recreate the activity, and a destroyed activity
+             ends the application: winit ends its event loop on Destroy and
+             Tawara then exits. Asset-path changes happen without user action,
+             for example on a navigation-mode change or after an install.
+             taskAffinity is empty, so no other application's activity can
+             join or be placed in Tawara's task. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize|stateHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|touchscreen|colorMode|mcc|mnc|grammaticalGender|assetsPaths|resourcesUnused">
+            <meta-data android:name="android.app.lib_name" android:value="tawara_mobile" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

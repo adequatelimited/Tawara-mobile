@@ -1,0 +1,348 @@
+# Tawara on Android and iOS.
+#
+# Every push and pull request: the workspace is checked on the host and for
+# both iOS targets, the Android app is built and run on an emulator, and the iOS
+# app is built and run on a simulator and linked for a device.
+#
+# Every push to main and every tag vX.Y.Z also builds the Android release: the
+# App Bundle and a universal APK signed with the upload key, kept as workflow
+# artifacts. A tag publishes them as a GitHub release. The iOS device build is
+# kept unsigned; the App Store release is made on a Mac that holds the keys.
+#
+# Every hour the job also looks at Tawara-wallet's main branch. When it has a
+# commit that no earlier run built, the Android app is built against it, as an
+# unsigned dry run kept as an artifact named "upstream-<commit>".
+
+name: mobile
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      app_rev:
+        description: "Build against this Tawara-wallet commit instead of the pinned one"
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: mobile-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_URL: https://github.com/adequatelimited/Tawara-wallet
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      checks: ${{ steps.plan.outputs.checks }}
+      upstream: ${{ steps.plan.outputs.upstream }}
+      app_rev: ${{ steps.plan.outputs.app_rev }}
+      label: ${{ steps.plan.outputs.label }}
+    steps:
+      - name: Decide what to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_REV: ${{ github.event.inputs.app_rev }}
+        run: |
+          set -eu
+          rev=
+          case "$EVENT" in
+            schedule)
+              echo "checks=false" >> "$GITHUB_OUTPUT"
+              rev=$(git ls-remote "$APP_URL" refs/heads/main | cut -f1)
+              [ -n "$rev" ] || { echo "Tawara-wallet's main branch was not found" >&2; exit 1; }
+              pinned=$(curl -fsSL "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/Cargo.toml" \
+                | grep -oE 'Tawara-wallet", rev = "[0-9a-f]{40}"' | grep -oE '[0-9a-f]{40}')
+              seen=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=tawara-android-upstream-${rev:0:12}" --jq .total_count)
+              if [ "$rev" = "$pinned" ] || [ "$seen" != 0 ]; then
+                echo "nothing new on Tawara-wallet's main branch"
+                echo "upstream=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              ;;
+            workflow_dispatch)
+              rev=$INPUT_REV
+              echo "checks=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "checks=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          if [ -n "$rev" ]; then
+            printf '%s' "$rev" | grep -qE '^[0-9a-f]{40}$' || { echo "app_rev must be a 40-digit commit id" >&2; exit 1; }
+            echo "upstream=true" >> "$GITHUB_OUTPUT"
+            echo "label=upstream-${rev:0:12}" >> "$GITHUB_OUTPUT"
+          else
+            echo "upstream=false" >> "$GITHUB_OUTPUT"
+            echo "label=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "app_rev=$rev" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: check
+    needs: plan
+    if: ${{ needs.plan.outputs.checks == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Clone the commit
+        run: |
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/tawara"
+          git -C "$HOME/tawara" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$HOME/tawara" checkout --quiet --detach "$GITHUB_SHA"
+          echo "TAWARA=$HOME/tawara" >> "$GITHUB_ENV"
+
+      - name: Toolchain and iOS targets
+        run: |
+          cd "$TAWARA"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          rustc -vV
+
+      - name: cargo fmt
+        run: cd "$TAWARA" && cargo fmt --all --check
+
+      - name: cargo clippy (host, iOS device, iOS simulator)
+        run: |
+          cd "$TAWARA"
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --locked --target aarch64-apple-ios -- -D warnings
+          cargo clippy --workspace --all-targets --locked --target aarch64-apple-ios-sim -- -D warnings
+
+      - name: cargo test
+        run: cd "$TAWARA" && cargo test --workspace --locked
+
+      - name: cargo deny
+        run: |
+          cd "$TAWARA"
+          cargo install --quiet --locked cargo-deny --version 0.20.2
+          cargo deny --locked check
+
+      - name: Third-party notices match Cargo.lock
+        run: |
+          cd "$TAWARA"
+          cargo install --quiet --locked --features cli cargo-about --version 0.9.2
+          bash ci/notices.sh --check
+
+  android:
+    name: android, emulator
+    needs: plan
+    if: ${{ needs.plan.outputs.checks == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Clone the commit
+        run: |
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/tawara"
+          git -C "$HOME/tawara" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$HOME/tawara" checkout --quiet --detach "$GITHUB_SHA"
+          echo "TAWARA=$HOME/tawara" >> "$GITHUB_ENV"
+
+      - name: Toolchain and Android targets
+        run: |
+          cd "$TAWARA"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-linux-android x86_64-linux-android
+          rustc -vV
+
+      - name: Crash parser self-check
+        run: bash "$TAWARA/platform/android/tawara.sh" selftest
+
+      - name: Build libtawara_mobile.so (arm64-v8a, x86_64)
+        run: bash "$TAWARA/platform/android/tawara.sh" build
+
+      - name: Package, align, sign and verify the APK
+        run: bash "$TAWARA/platform/android/tawara.sh" apk
+
+      - name: Emulator and checks
+        run: bash "$TAWARA/platform/android/tawara.sh" emulator
+
+  android-release:
+    name: android, release
+    needs: plan
+    if: ${{ (needs.plan.outputs.upstream == 'true') || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      APP_REV: ${{ needs.plan.outputs.app_rev }}
+    steps:
+      - name: Clone the commit
+        run: |
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/tawara"
+          git -C "$HOME/tawara" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$HOME/tawara" checkout --quiet --detach "$GITHUB_SHA"
+          echo "TAWARA=$HOME/tawara" >> "$GITHUB_ENV"
+
+      - name: Toolchain and Android targets
+        run: |
+          cd "$TAWARA"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - name: Use the Tawara-wallet commit under test
+        if: ${{ env.APP_REV != '' }}
+        run: |
+          cd "$TAWARA"
+          sed -i -E "s|(Tawara-wallet\", rev = \")[0-9a-f]{40}|\1$APP_REV|" Cargo.toml
+          grep -q "rev = \"$APP_REV\"" Cargo.toml
+          cargo update -p tawara-app
+          echo "built against Tawara-wallet commit $APP_REV"
+
+      - name: Unsigned dry run
+        if: ${{ env.APP_REV != '' }}
+        run: |
+          cd "$TAWARA"
+          TAWARA_ANDROID_DRY_RUN=1 TAWARA_ANDROID_ICON_DIR="$TAWARA/platform/android/icon" \
+          TAWARA_ANDROID_OUT="$RUNNER_TEMP/out" bash platform/android/release.sh
+
+      - name: Signed App Bundle and APK
+        if: ${{ env.APP_REV == '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.TAWARA_UPLOAD_KEYSTORE_B64 }}
+          TAWARA_UPLOAD_KEY_ALIAS: ${{ secrets.TAWARA_UPLOAD_KEY_ALIAS }}
+          TAWARA_UPLOAD_STOREPASS: ${{ secrets.TAWARA_UPLOAD_STOREPASS }}
+        run: |
+          cd "$TAWARA"
+          [ -n "$KEYSTORE_B64" ] || { echo "the upload keystore secret is not set" >&2; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.p12"
+          TAWARA_UPLOAD_KEYSTORE="$RUNNER_TEMP/upload.p12" \
+          TAWARA_BUILD_NUMBER=$(bash platform/build-number.sh counter) \
+          TAWARA_ANDROID_ICON_DIR="$TAWARA/platform/android/icon" \
+          TAWARA_ANDROID_APK=1 TAWARA_ANDROID_OUT="$RUNNER_TEMP/out" \
+            bash platform/android/release.sh
+          rm -f "$RUNNER_TEMP/upload.p12"
+          ls -l "$RUNNER_TEMP/out"
+
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tawara-android-${{ needs.plan.outputs.label }}
+          path: |
+            ${{ runner.temp }}/out/*.aab
+            ${{ runner.temp }}/out/*.apk
+            ${{ runner.temp }}/out/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
+
+  ios-simulator:
+    name: ios, simulator
+    needs: plan
+    if: ${{ needs.plan.outputs.checks == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    steps:
+      - name: Clone the commit
+        run: |
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/tawara"
+          git -C "$HOME/tawara" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$HOME/tawara" checkout --quiet --detach "$GITHUB_SHA"
+          echo "TAWARA=$HOME/tawara" >> "$GITHUB_ENV"
+
+      - name: Toolchain and simulator target
+        run: |
+          cd "$TAWARA"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-apple-ios-sim
+          xcode-select -p
+
+      - name: Build, bundle, simulator and checks
+        run: bash "$TAWARA/platform/ios/tawara.sh" simulator
+
+  ios-device:
+    name: ios, device build
+    needs: plan
+    if: ${{ needs.plan.outputs.checks == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    steps:
+      - name: Clone the commit
+        run: |
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/tawara"
+          git -C "$HOME/tawara" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$HOME/tawara" checkout --quiet --detach "$GITHUB_SHA"
+          echo "TAWARA=$HOME/tawara" >> "$GITHUB_ENV"
+
+      - name: Toolchain and device target
+        run: |
+          cd "$TAWARA"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-apple-ios
+          xcode-select -p
+
+      - name: Build and link for a device
+        run: bash "$TAWARA/platform/ios/tawara.sh" device
+
+      - name: Unsigned app bundle
+        run: |
+          cd "$TAWARA"
+          TAWARA_IOS_DRY_RUN=1 TAWARA_EXPORT_COMPLIANCE=false \
+          TAWARA_IOS_ICON_DIR="$TAWARA/platform/ios/icon" TAWARA_IOS_OUT="$RUNNER_TEMP/ios" \
+            bash platform/ios/release.sh
+          cd "$RUNNER_TEMP/ios"
+          ditto -c -k --keepParent Tawara.app "$RUNNER_TEMP/Tawara-unsigned-ios.zip"
+
+      - name: Keep the unsigned app bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tawara-ios-unsigned-${{ needs.plan.outputs.label }}
+          path: ${{ runner.temp }}/Tawara-unsigned-ios.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    needs: [plan, android-release]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.upstream != 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tawara-android-${{ needs.plan.outputs.label }}
+          path: ${{ runner.temp }}/rel
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/rel"
+          apk=$(ls Tawara-*.apk)
+          case "$apk" in "Tawara-${TAG#v}+"*) ;; *) echo "tag $TAG does not match $apk" >&2; exit 1 ;; esac
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          Tawara ${TAG#v} for Android.
+
+          - \`$apk\`: install it directly on a phone running Android 8.0 or later. Allow installs from your browser or file manager when Android asks.
+          - The \`.aab\` file is the Google Play bundle and cannot be installed directly.
+
+          Check each download against \`SHA256SUMS\`. The iOS app will follow through the App Store.
+          NOTES
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Tawara ${TAG#v} for Android" \
+            --notes-file "$RUNNER_TEMP/notes.md" --verify-tag ./*

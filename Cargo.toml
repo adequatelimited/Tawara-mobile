@@ -1,0 +1,122 @@
+[workspace]
+resolver = "3"
+members = ["crates/mobile"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# The Mochimo Cryptocurrency Engine License Agreement, version 1.0, identical
+# to Tawara-wallet's `LICENSE.md`. It has no SPDX identifier, hence
+# `license-file` and the clarification in deny.toml.
+license-file = "LICENSE.md"
+# Not published to a registry; the apps ship as signed packages.
+publish = false
+repository = "https://github.com/adequatelimited/Tawara-mobile"
+
+[workspace.dependencies]
+# The application from Tawara-wallet, pinned by full commit hash.
+#
+# `tawara-app` is the iced application the desktop runs: every screen, the
+# wallet worker, and through `tawara-wallet-core` the wallet library. This
+# repository holds only the mobile entry points, platform glue and platform
+# files. Changes to screens, wallet logic or user-facing text are made in
+# Tawara-wallet and taken here by moving `rev`; no `[patch]`, `[replace]`,
+# vendored copy or path override. `crates/mobile/tests/policy.rs` requires a
+# 40-hex `rev`.
+#
+# Tawara-wallet's iced `image-without-codecs` feature (for the Android scanner
+# preview) brings image, byteorder-lite, kamadak-exif, moxcms, mutate_once and
+# pxfm into Cargo.lock.
+tawara-app = { git = "https://github.com/adequatelimited/Tawara-wallet", rev = "5ed9e8f35284e3856027cbd0f9518191b3271152" }
+
+# Platform glue.
+#
+# `iced_winit` comes from the mobile iced fork (release `v0.14.1-mobile.4`) at
+# the commit Tawara-wallet pins for `iced`, so the build has one copy of every
+# iced crate and one winit; the policy test checks the lockfile for this. That
+# release has no mundy dependency, so no zbus enters the build.
+#
+# Android: the fork's `set_android_app` and `on_lifecycle`, winit's
+# NativeActivity backend (enabled by `android-native-activity`, explicitly,
+# because exactly one android-activity backend must be enabled), and JNI for
+# the clipboard, share sheet and Back. iOS: the fork places the winit window
+# in UIKit's window scene; the shell uses the objc2 versions winit 0.30.13
+# already links for the pasteboard, share sheet, app-switcher cover, store
+# protection class and backup exclusion. No Java, Kotlin, Swift or Objective-C
+# source.
+#
+# winit is not listed: it is the fork's vendored copy, used as
+# `iced_winit::winit`, and a crates.io winit would add a second copy.
+iced_winit = { git = "https://github.com/patricksmithlaravel/iced_mobile", rev = "7325ccd5823a118d46f023e91010d27f07b6dd90", default-features = false, features = ["android-native-activity"] }
+jni = "0.22.4"
+ndk-context = "0.1.1"
+# Camera for the Android QR scanner. `media` links `mediandk` (AImageReader).
+# crates/mobile/src/android/scan.rs links `camera2ndk` itself, because ndk-sys
+# declares its functions without linking them. Android only: ndk-sys does not
+# compile for other targets.
+ndk-sys = { version = "0.6", features = ["media"] }
+# The Android entry calls `_exit`, which ends the process without running the
+# C library's exit handlers (crates/mobile/src/android.rs). This version is
+# already in the lockfile.
+libc = "0.2.190"
+# QR decoder for the Android scanner. Default features are off: `img` would add
+# the `image` crate, which is unused because the camera luminance is passed
+# directly. Licence `(MIT OR Apache-2.0) AND ISC`; deny.toml admits ISC.
+rqrr = { version = "0.11", default-features = false }
+objc2 = "0.5.2"
+block2 = "0.5.1"
+objc2-foundation = { version = "0.2.2", features = [
+    "NSArray",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSError",
+    "NSFileManager",
+    "NSGeometry",
+    "NSNotification",
+    "NSOperation",
+    "NSPathUtilities",
+    "NSString",
+    "NSThread",
+    "NSURL",
+    "NSValue",
+    "block2",
+] }
+objc2-ui-kit = { version = "0.2.2", features = [
+    "block2",
+    "UIActivity",
+    "UIActivityViewController",
+    "UIApplication",
+    "UIButton",
+    "UIColor",
+    "UIControl",
+    "UIGeometry",
+    "UIOrientation",
+    "UIPasteboard",
+    "UIResponder",
+    "UIScene",
+    "UIScreen",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene",
+] }
+
+# Used only by the policy test, to read the manifests and the lockfile.
+toml = "0.9"
+
+# The release profile is a security property of the wallet library. Cargo
+# reads profiles only from the root of the workspace being built, so the
+# library's and Tawara-wallet's settings must be restated here.
+#
+# `panic = "unwind"`: key material in mochimo-crypto is scrubbed in `Drop`
+# (`zeroize`, `Zeroizing`, `Secret`). With `panic = "abort"` destructors do not
+# run, and the master seed would remain in memory after a panic.
+#
+# `overflow-checks = true`: off by default in release, so arithmetic on a
+# balance would otherwise wrap silently.
+#
+# `crates/mobile/tests/policy.rs` fails if either line changes.
+[profile.release]
+panic = "unwind"
+overflow-checks = true

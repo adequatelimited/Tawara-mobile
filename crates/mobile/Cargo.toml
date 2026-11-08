@@ -1,0 +1,49 @@
+[package]
+name = "tawara-mobile"
+authors = ["Adequate Systems HK Limited"]
+description = "The Tawara entry points for Android and iOS."
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lib]
+# Android loads this crate as `libtawara_mobile.so`, built with
+# `cargo rustc --crate-type cdylib` by `platform/android/tawara.sh build`, so
+# ordinary workspace builds produce no shared library.
+crate-type = ["lib"]
+
+[[bin]]
+# The iOS app bundle executable. winit calls `UIApplicationMain` from it, so it
+# must be the process's `main`. On other systems it prints a message and exits.
+name = "tawara"
+path = "src/main.rs"
+
+[dependencies]
+tawara-app.workspace = true
+# QR decoder for the Android scanner. Not target-specific, because `src/qr.rs`
+# is also compiled and tested on the host.
+rqrr.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+# winit is not listed: the fork's copy is used as `iced_winit::winit`, and a
+# crates.io winit would add a second copy.
+iced_winit.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+# The Android entry calls `_exit`, which ends the process without running the C
+# library's exit handlers. The policy test expects libc here.
+libc.workspace = true
+# Camera and image reader for the QR scanner (`media` feature set in the
+# workspace). Android only: it does not compile for other targets.
+ndk-sys.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2.workspace = true
+block2.workspace = true
+objc2-foundation.workspace = true
+objc2-ui-kit.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
